@@ -1,1 +1,33 @@
+# --- Verilator & Build Artifacts ---
+# This is where your compiled C++ simulation lives
+obj_dir/
+build/
+*.mk
+*.dat
+*.out
+
+# --- Waveforms ---
+# These files can become massive (GBs) very quickly
+*.vcd
+*.ghw
+*.gtkw
+
+# --- C++ / Compilation Junk ---
+*.o
+*.d
+*.a
+*.elf
+*.bin
+*.hex
+
+# --- Editor & OS Junk ---
 .vscode/
+.DS_Store
+*.swp
+*~
+
+# --- Efinix / FPGA Tool Junk ---
+# If you eventually run the Efinity flow in this folder
+work_syn/
+work_pnr/
+efinity_temp/
