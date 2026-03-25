@@ -1,118 +1,107 @@
-# Comprehensive Guide to the 64-bit RISC-V ALU
+# Comprehensive Guide to the Optimized 64-bit RISC-V ALU
 
-This document explains the `alu.v` hardware module in detail. It is designed for readers who are new to hardware description languages (Verilog) and computer architecture.
-
----
-
-## 1. What is an ALU?
-An **ALU (Arithmetic Logic Unit)** is the "calculator" inside a computer's processor. It takes two numbers, performs a mathematical or logical operation (like addition or a bitwise AND), and outputs the result.
-
-In our project, this ALU follows the **RISC-V** standard, specifically the **RV64I** (Base) and **RV64M** (Math) extensions.
+This document provides a technical overview of the `alu.v` module, implementing a high-performance, hardware-optimized Arithmetic Logic Unit for the **ark-rv64i** SoC.
 
 ---
 
-## 2. Code Structure: The Module Header
-The first few lines define the "box" and its "pins" (inputs and outputs).
+## 1. Overview
+The ALU is the primary computational engine of the processor. This implementation supports multiple standard RISC-V extensions with a split execution path for optimal frequency and area.
+
+### Supported Extensions:
+- **RV64I**: Base Integer Instruction Set (including "Word" instructions).
+- **RV64M**: Standard Extension for Integer Multiplication and Division.
+- **Zba, Zbb, Zbs**: Bitmanipulation Extensions (Address generation, Bit-level logic, Single-bit ops).
+
+---
+
+## 2. Module Interface
+The ALU uses a synchronous interface for multi-cycle operations.
 
 ```verilog
 module alu (
-    input wire [63:0] a,
-    input wire [63:0] b,
-    input wire [4:0] alu_ctrl,
-    output reg [63:0] result,
-    output wire zero
+    input wire clk,           // System Clock
+    input wire rst_n,         // Active-low Reset
+    input wire [63:0] a,      // Operand A
+    input wire [63:0] b,      // Operand B
+    input wire [5:0] alu_ctrl,// 6-bit Control (Bit 5: Word Mode, Bits 4-0: Opcode)
+    input wire start,         // Start signal for multi-cycle units
+    output reg [63:0] result, // Operation Result
+    output wire ready,        // Handshake: High when result is valid
+    output wire zero,         // Status: result == 0
+    output wire eq,           // Branching: a == b
+    output wire lt,           // Branching: a < b (signed)
+    output wire ltu          // Branching: a < b (unsigned)
 );
 ```
 
-### Syntax Breakdown:
-*   **`module ... endmodule`**: Think of this as a "class" in software. It encapsulates all the logic for this specific piece of hardware.
-*   **`input wire [63:0] a`**: 
-    *   `input`: Electricity flows *into* this pin.
-    *   `wire`: A physical connection that carries a signal.
-    *   `[63:0]`: This is a **64-bit bus**. It means there are 64 individual wires bundled together to represent one large number (bits 0 through 63).
-*   **`output reg [63:0] result`**:
-    *   `output`: The answer flows *out* of this pin.
-    *   `reg`: Short for "register." In Verilog, if you want to assign a value to an output inside a `case` or `if` block, it must be declared as a `reg`.
-*   **`alu_ctrl`**: A 5-bit signal that tells the ALU *which* math problem to solve (e.g., `0` for add, `16` for multiply).
+### Control Signal Mapping (`alu_ctrl`)
+- **`alu_ctrl[5]` (Word Mode)**: 
+    - `0`: 64-bit Doubleword operation.
+    - `1`: 32-bit Word operation (results are sign-extended to 64 bits).
+- **`alu_ctrl[4:0]` (Opcode)**: See the "Opcodes Table" below.
 
 ---
 
-## 3. Multiplication Helpers
-Before doing the math, we calculate the product of `a` and `b`.
+## 3. Hardware Architecture
 
-```verilog
-wire [127:0] mul_full_ss = $signed(a) * $signed(b);
-wire [127:0] mul_full_su = $signed(a) * $signed({1'b0, b});
-wire [127:0] mul_full_uu = a * b;
-```
+### A. Fast Path (1 Clock Cycle)
+**Operations**: ADD, SUB, Logical, Shifts, Bitmanip, Branch Comparisons.
+- **Immediate Results**: `ready` is always high for these instructions.
+- **Zba/Zbb/Zbs Integration**: Includes address generation (`SHxADD`), bit counting (`CLZ`, `CTZ`, `CPOP`), and single-bit manipulation (`BSET`, etc.).
 
-### Why 128 bits?
-When you multiply two 64-bit numbers (e.g., $10 \times 10 = 100$), the result can be twice as long as the inputs. We need 128 bits to hold the full potential answer.
+### B. Medium Path (3 Clock Cycles, Pipelined)
+**Operations**: MUL, MULH, MULHSU, MULHU.
+- **3-Stage Pipeline**: Balanced for high clock frequency. Can accept a new multiplication every cycle.
+- **Word Support**: `MULW` truncates and sign-extends correctly.
 
-### Syntax Breakdown:
-*   **`$signed()`**: Tells the computer to treat the number as having a positive or negative sign (Two's Complement).
-*   **`{1'b0, b}`**: This is **concatenation**. It adds a `0` to the front of `b` to force it to be treated as a positive (unsigned) number during a signed multiplication.
-*   **`ss`, `su`, `uu`**: These stand for Signed-Signed, Signed-Unsigned, and Unsigned-Unsigned.
-
----
-
-## 4. The Main Logic Block
-This is where the actual calculation happens.
-
-```verilog
-always @(*) begin
-    case (alu_ctrl)
-        ...
-    endcase
-end
-```
-
-### Syntax Breakdown:
-*   **`always @(*)`**: This means "Always perform the following logic whenever *any* input (`a`, `b`, or `alu_ctrl`) changes." It is **combinational logic**, meaning it happens instantly.
-*   **`case (alu_ctrl)`**: Just like a "switch" statement in C++ or Java. It looks at the 5-bit control code and picks the matching operation.
+### C. Slow Path (Iterative, 32/64 Cycles)
+**Operations**: DIV, DIVU, REM, REMU.
+- **Restoring Division**: Processes 1 bit per cycle.
+- **Full Compliance**: Handles divide-by-zero (returns -1) and signed overflow (returns the dividend) as per the RISC-V spec.
+- **Latency**: 32 cycles for Word operations, 64 cycles for Doubleword.
 
 ---
 
-## 5. Operations Explained
+## 4. Opcodes Table
 
-### A. Basic Math (RV64I)
-*   **`5'b00000: result = a + b;`**: Standard addition.
-*   **`5'b01000: result = a - b;`**: Standard subtraction.
-*   **`5'b00111: result = a & b;`**: **AND Gate**. Only keeps bits that are `1` in both `a` and `b`.
-*   **`5'b00001: result = a << b[5:0];`**: **Shift Left**. Moves all bits in `a` to the left. `b[5:0]` means we only use the last 6 bits of `b` to determine how far to shift (since $2^6 = 64$).
-
-### B. Set Less Than (SLT)
-*   **`5'b00010: result = ($signed(a) < $signed(b)) ? 64'd1 : 64'd0;`**
-    *   If `a` is less than `b`, the result is `1`. Otherwise, it's `0`.
-    *   **`64'd1`**: Means "a 64-bit Decimal number with the value 1."
-
-### C. Multiplication and Division (RV64M)
-*   **`MUL` (5'b10000)**: Returns the lower 64 bits of the product.
-*   **`MULH` (5'b10001)**: Returns the upper 64 bits of a signed product (the "carry" part).
-*   **`DIV` (5'b10100)**:
-    ```verilog
-    if (b == 64'b0) result = 64'hFFFF_FFFF_FFFF_FFFF;
-    ```
-    *   If you divide by zero, the hardware doesn't crash; it returns `-1` (which is all `F`s in hexadecimal).
+| Opcode (5-bit) | Name | Description | Path |
+| :--- | :--- | :--- | :--- |
+| `00000` | ADD / ADDW | Addition | Fast |
+| `01000` | SUB / SUBW | Subtraction | Fast |
+| `00001` | SLL / SLLW | Shift Left Logical | Fast |
+| `00101` | SRL / SRLW | Shift Right Logical | Fast |
+| `01101` | SRA / SRAW | Shift Right Arithmetic | Fast |
+| **Zba** | | | |
+| `00010` | SH1ADD | `(a << 1) + b` | Fast |
+| `00011` | SH2ADD | `(a << 2) + b` | Fast |
+| `01110` | SH3ADD | `(a << 3) + b` | Fast |
+| **Zbs** | | | |
+| `01100` | BSET | Bit Set | Fast |
+| `01011` | BCLR | Bit Clear | Fast |
+| `01010` | BINV | Bit Invert | Fast |
+| `01001` | BEXT | Bit Extract | Fast |
+| **Zbb** | | | |
+| `11001` | ANDN | `a & ~b` | Fast |
+| `11010` | ORN | `a | ~b` | Fast |
+| `01111` | XNOR | `~(a ^ b)` | Fast |
+| `11011` | ROL / ROLW | Rotate Left | Fast |
+| `11100` | ROR / RORW | Rotate Right | Fast |
+| `11101` | CLZ / CLZW | Count Leading Zeros | Fast |
+| `11110` | CTZ / CTZW | Count Trailing Zeros | Fast |
+| `11111` | CPOP / CPOPW| Population Count | Fast |
+| **RV64M** | | | |
+| `10000` | MUL / MULW | Multiply (Lower) | Medium |
+| `10001` | MULH | Multiply High (Signed) | Medium |
+| `10010` | MULHSU | Multiply High (Signed/Unsigned) | Medium |
+| `10011` | MULHU | Multiply High (Unsigned) | Medium |
+| `10100` | DIV / DIVW | Division (Signed) | Slow |
+| `10101` | DIVU / DIVUW | Division (Unsigned) | Slow |
+| `10110` | REM / REMW | Remainder (Signed) | Slow |
+| `10111` | REMU / REMUW| Remainder (Unsigned) | Slow |
 
 ---
 
-## 6. The Status Flag (Zero)
-```verilog
-assign zero = (result == 64'b0);
-```
-*   **`assign`**: Creates a permanent "live" connection.
-*   If the `result` of any math operation is exactly zero, the `zero` wire turns "High" (1).
-*   **Usage**: The processor uses this to handle "Branches." For example: "If $A - B = 0$, then $A$ and $B$ are equal, so jump to a different part of the code."
-
----
-
-## Summary of Syntax Used
-| Symbol | Meaning | Example |
-| :--- | :--- | :--- |
-| `[63:0]` | Bit range (64 bits) | `wire [7:0] my_byte;` |
-| `5'b101` | 5-bit Binary number | `5'b00101` is the number 5. |
-| `64'hFF` | 64-bit Hexadecimal | `h` stands for Hex. |
-| `<<<` | Arithmetic Shift | Keeps the sign bit. |
-| `==` | Equality Check | Returns 1 if values match. |
-| `? :` | Ternary Operator | `(condition) ? true_val : false_val` |
+## 5. Verification
+The ALU is verified using a Verilator-based C++ testbench.
+- **Waveforms**: Generated as `waveforms/dump.vcd` for analysis in GTKWave.
+- **Success Criteria**: All opcodes match expected mathematical results, and multi-cycle handshake logic (`start`/`ready`) is strictly followed.

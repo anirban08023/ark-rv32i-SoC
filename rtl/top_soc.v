@@ -1,15 +1,39 @@
 module top_soc (
-    input clk,
-    input reset,
-    output reg [7:0] counter
-  );
+    input wire clk,
+    input wire rst_n,
+    
+    // External interface to exercise the ALU
+    input wire [63:0] alu_a,
+    input wire [63:0] alu_b,
+    input wire [5:0]  alu_ctrl,
+    input wire        alu_start,
+    
+    output wire [63:0] alu_result,
+    output wire        alu_ready,
+    output wire        alu_zero
+);
 
-  always @(posedge clk)
-  begin
-    if (reset)
-      counter <= 8'b0;
-    else
-      counter <= counter + 1'b1;
-  end
+    // Comparison flags (unused in this SoC configuration)
+    /* verilator lint_off UNUSEDSIGNAL */
+    wire alu_eq, alu_lt, alu_ltu;
+    /* verilator lint_on UNUSEDSIGNAL */
+
+    // Instantiate the Optimized ALU
+    alu u_alu (
+        .clk      (clk),
+        .rst_n    (rst_n),
+        .a        (alu_a),
+        .b        (alu_b),
+        .alu_ctrl (alu_ctrl),
+        .start    (alu_start),
+        .result   (alu_result),
+        .ready    (alu_ready),
+        .zero     (alu_zero),
+        .eq       (alu_eq),
+        .lt       (alu_lt),
+        .ltu      (alu_ltu)
+    );
+
+    // Placeholder for other SoC components (Decoder, Memory, etc.)
 
 endmodule
