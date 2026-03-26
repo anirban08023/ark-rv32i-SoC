@@ -1,12 +1,14 @@
-module top_soc (
+module top_soc #(
+    parameter IMEM_ADDR_WIDTH = 16,  // Instruction memory address width
+    parameter IMEM_SIZE       = 1024, // Instruction memory size (words)
+    parameter DMEM_ADDR_WIDTH = 16,  // Data memory address width
+    parameter DMEM_SIZE       = 4096 // Data memory size (bytes)
+) (
     input wire clk,
     input wire rst_n,
 
-    // Instruction input
-    input wire [31:0] instr,         // 32-bit instruction from instruction memory
-
-    // Program Counter output
-    output wire [63:0] pc,           // Current program counter (for instruction fetch)
+    // Program Counter output (exposed for debugging)
+    output wire [63:0] pc,           // Current program counter
     output wire [63:0] pc_next,      // Next PC value
 
     // Outputs
@@ -34,6 +36,9 @@ module top_soc (
     // Internal Datapath Signals
     // ==============================================================
 
+    // Instruction from memory
+    wire [31:0] instr;
+
     // Decoder outputs
     wire [4:0]  rs1_addr, rs2_addr, rd_addr;
     wire [63:0] imm;
@@ -51,8 +56,28 @@ module top_soc (
     // PC outputs
     wire [63:0] pc_plus_4;
 
-    // Write-back data selection: ALU result or PC+4 (for JAL/JALR)
-    wire [63:0] rd_data = jump ? pc_plus_4 : alu_result;
+    // Data memory signals
+    wire [63:0] mem_read_data;
+    wire        mem_ready;
+
+    // Write-back data selection: Memory data, ALU result, or PC+4
+    // Priority: LOAD > JUMP > ALU
+    wire [63:0] rd_data = mem_read  ? mem_read_data :
+                          jump      ? pc_plus_4 :
+                                      alu_result;
+
+    // ==============================================================
+    // Instruction Memory Instance
+    // ==============================================================
+    instr_mem #(
+        .ADDR_WIDTH (IMEM_ADDR_WIDTH),
+        .MEM_SIZE   (IMEM_SIZE)
+    ) u_instr_mem (
+        .clk   (clk),
+        .rst_n (rst_n),
+        .pc    (pc),
+        .instr (instr)
+    );
 
     // ==============================================================
     // Program Counter Instance
@@ -132,7 +157,26 @@ module top_soc (
     );
 
     // ==============================================================
-    // TODO: Add instruction memory, data memory interface
+    // Data Memory Instance
+    // ==============================================================
+    data_mem #(
+        .ADDR_WIDTH (DMEM_ADDR_WIDTH),
+        .MEM_SIZE   (DMEM_SIZE)
+    ) u_data_mem (
+        .clk        (clk),
+        .rst_n      (rst_n),
+        .addr       (alu_result),      // Address from ALU (rs1 + offset)
+        .write_data (rs2_data),        // Data to write from rs2
+        .mem_read   (mem_read),
+        .mem_write  (mem_write),
+        .mem_size   (mem_size),
+        .mem_unsigned(mem_unsigned),
+        .read_data  (mem_read_data),
+        .mem_ready  (mem_ready)
+    );
+
+    // ==============================================================
+    // Datapath Complete - All components integrated
     // ==============================================================
 
 endmodule
